@@ -219,6 +219,21 @@ outbound webhooks and the consumer aggregator. Handler execution is recorded in
 Both web probes use the standard `{ data }` envelope and echo `x-request-id`. No authentication is
 required.
 
+## Secret scan
+
+- Tool: Gitleaks 8.30.1, offline, default rules plus `.gitleaks.toml`.
+- Working tree at handover: 2.6 MB scanned, **0 findings**. Two initial matches were the password
+  policy's deliberate common-password blocklist and a wrong-password fixture in an integration
+  test; both are non-secret and allowlisted by path with a reason in `.gitleaks.toml`.
+- Git history at handover: **6 commits scanned, 0 findings**. The repository had no commits before
+  this handover, so there is no older history to scan.
+- A real `.env` and other ignored files are not scanned by a tracked-tree scan and were never
+  staged. `git check-ignore` confirms they are ignored.
+
+If a secret is ever committed: rotate/revoke it at the provider first; remove it from history with
+`git filter-repo` or BFG; force-push the rewritten branch; ask collaborators to re-clone; audit
+access logs; and treat any exposure as an incident. Deleting it in a later commit is not enough.
+
 ## Features not implemented (verified)
 
 See `docs/DEPLOYMENT_GUIDE.md` §15 for severity and action. Confirmed absent or incomplete:
