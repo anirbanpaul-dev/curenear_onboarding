@@ -1,0 +1,10 @@
+# Replace placeholders with real GitHub handles or teams before enabling required reviews.
+* @CHANGE_ME_OWNER @CHANGE_ME_DEVELOPER
+
+/apps/web/ @CHANGE_ME_DEVELOPER
+/apps/worker/ @CHANGE_ME_DEVELOPER
+/packages/db/ @CHANGE_ME_DEVELOPER
+/docs/ @CHANGE_ME_OWNER
+/.github/ @CHANGE_ME_DEVOPS
+/docker-compose.prod.yml @CHANGE_ME_DEVOPS
+/render.yaml @CHANGE_ME_DEVOPS

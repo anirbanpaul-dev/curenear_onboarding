@@ -1,0 +1,12 @@
+# Extend the default Gitleaks rules. The only allowlisted paths are the password
+# policy's deliberate common-password blocklist and an integration test's wrong
+# password string; both are code/test fixtures, not credentials.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secret password fixtures"
+paths = [
+  '''apps/web/tests/integration/auth\.test\.ts''',
+  '''packages/shared/src/password-policy\.ts''',
+]

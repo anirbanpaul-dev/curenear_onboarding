@@ -1,0 +1,51 @@
+# Dependencies and build output
+node_modules/
+.pnpm-store/
+.next/
+out/
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+coverage/
+playwright-report/
+blob-report/
+test-results/
+
+# Environment files: commit examples only
+.env
+.env.*
+!.env.example
+!.env.production.example
+!.env.staging.example
+
+# Logs and local process files
+*.log
+logs/
+.dev-server.log
+.e2e-*.log
+
+# Local services, uploads and data
+.pgdata/
+uploads/
+storage/
+.local-backup/
+.tools/
+data/
+backups/
+
+# Database dumps and large datasets
+*.dump
+*.sql.gz
+*.csv.gz
+
+# Local files that the app does not need in git
+.freebuff/
+.cloud-attachments/
+.tmp/
+
+# Editors and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
