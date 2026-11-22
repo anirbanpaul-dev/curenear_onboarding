@@ -6,9 +6,11 @@ node_modules
 .gitignore
 .env
 .env.*
-!.env.example
-!.env.production.example
-!.env.staging.example
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.production.example
+!**/.env.staging.example
 coverage
 test-results
 playwright-report
