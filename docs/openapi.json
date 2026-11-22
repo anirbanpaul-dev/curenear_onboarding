@@ -1,0 +1,427 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "CareNear Portal API",
+    "version": "1.0.0",
+    "description": "Contract for the portal JSON API. Every response is wrapped in a data/meta/requestId envelope; failures carry a stable error code."
+  },
+  "servers": [{ "url": "http://localhost:3000", "description": "Local development" }],
+  "tags": [
+    { "name": "Health" },
+    { "name": "Auth" },
+    { "name": "Providers" },
+    { "name": "Notifications" },
+    { "name": "Exports" }
+  ],
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "tags": ["Health"],
+        "summary": "Liveness probe",
+        "responses": {
+          "200": {
+            "description": "The API process is alive",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthEnvelope" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login",
+        "tags": ["Auth"],
+        "summary": "Exchange credentials for a session cookie",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LoginRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SessionEnvelope" }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "operationId": "getCurrentUser",
+        "tags": ["Auth"],
+        "summary": "The signed-in user, actor and effective permissions",
+        "responses": {
+          "200": {
+            "description": "Current session",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MeEnvelope" }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/providers": {
+      "get": {
+        "operationId": "listAdminProviders",
+        "tags": ["Providers"],
+        "summary": "Administrator provider directory",
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1 } },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100 }
+          },
+          {
+            "name": "pin",
+            "in": "query",
+            "schema": { "type": "string", "pattern": "^[1-9][0-9]{5}$" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of providers with facets",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProviderListEnvelope" }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          },
+          "403": {
+            "description": "Staff cannot read the whole directory",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications": {
+      "get": {
+        "operationId": "listNotifications",
+        "tags": ["Notifications"],
+        "summary": "The caller's own notifications",
+        "parameters": [
+          {
+            "name": "unread",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["true", "false"] }
+          },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1 } },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Notifications for the signed-in account",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NotificationListEnvelope" }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/exports": {
+      "get": {
+        "operationId": "listExports",
+        "tags": ["Exports"],
+        "summary": "The caller's asynchronous export history",
+        "responses": {
+          "200": {
+            "description": "Export jobs requested by the signed-in account",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ExportListEnvelope" }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "LoginRequest": {
+        "type": "object",
+        "required": ["email", "password"],
+        "additionalProperties": false,
+        "properties": {
+          "email": { "type": "string", "format": "email" },
+          "password": { "type": "string", "minLength": 1, "maxLength": 200 }
+        }
+      },
+      "SessionUser": {
+        "type": "object",
+        "required": ["id", "email", "name", "role"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "email": { "type": "string", "format": "email" },
+          "name": { "type": "string" },
+          "role": { "type": "string", "enum": ["ADMIN", "STAFF"] }
+        }
+      },
+      "HealthEnvelope": {
+        "type": "object",
+        "required": ["data", "requestId"],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["status", "apiVersion", "time"],
+            "additionalProperties": false,
+            "properties": {
+              "status": { "type": "string", "const": "ok" },
+              "apiVersion": { "type": "string" },
+              "time": { "type": "string", "format": "date-time" }
+            }
+          },
+          "requestId": { "type": "string", "minLength": 1 }
+        }
+      },
+      "SessionEnvelope": {
+        "type": "object",
+        "required": ["data", "requestId"],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["user"],
+            "additionalProperties": true,
+            "properties": { "user": { "$ref": "#/components/schemas/SessionUser" } }
+          },
+          "requestId": { "type": "string", "minLength": 1 }
+        }
+      },
+      "MeEnvelope": {
+        "type": "object",
+        "required": ["data", "requestId"],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["user", "actor", "permissions"],
+            "additionalProperties": false,
+            "properties": {
+              "user": { "$ref": "#/components/schemas/SessionUser" },
+              "actor": {
+                "type": "object",
+                "required": ["userId", "role"],
+                "additionalProperties": false,
+                "properties": {
+                  "userId": { "type": "string", "format": "uuid" },
+                  "role": { "type": "string", "enum": ["ADMIN", "STAFF"] }
+                }
+              },
+              "permissions": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "requestId": { "type": "string", "minLength": 1 }
+        }
+      },
+      "ProviderSummary": {
+        "type": "object",
+        "required": ["id", "code", "providerType", "status"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "code": { "type": "string" },
+          "providerType": { "type": "string" },
+          "status": { "type": "string" },
+          "legalName": { "type": ["string", "null"] },
+          "primaryPinCode": { "type": ["string", "null"] }
+        }
+      },
+      "ProviderListEnvelope": {
+        "type": "object",
+        "required": ["data", "meta", "requestId"],
+        "additionalProperties": false,
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/ProviderSummary" } },
+          "meta": {
+            "type": "object",
+            "required": ["page", "pageSize", "total", "totalPages"],
+            "additionalProperties": true,
+            "properties": {
+              "page": { "type": "integer", "minimum": 1 },
+              "pageSize": { "type": "integer", "minimum": 1 },
+              "total": { "type": "integer", "minimum": 0 },
+              "totalPages": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "requestId": { "type": "string", "minLength": 1 }
+        }
+      },
+      "Notification": {
+        "type": "object",
+        "required": ["id", "type", "title", "body", "readAt", "createdAt"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "title": { "type": "string" },
+          "body": { "type": "string" },
+          "readAt": { "type": ["string", "null"] },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "NotificationListEnvelope": {
+        "type": "object",
+        "required": ["data", "requestId"],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["rows", "total", "unread", "page", "pageSize"],
+            "additionalProperties": false,
+            "properties": {
+              "rows": { "type": "array", "items": { "$ref": "#/components/schemas/Notification" } },
+              "total": { "type": "integer", "minimum": 0 },
+              "unread": { "type": "integer", "minimum": 0 },
+              "page": { "type": "integer", "minimum": 1 },
+              "pageSize": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "requestId": { "type": "string", "minLength": 1 }
+        }
+      },
+      "ExportJob": {
+        "type": "object",
+        "required": ["id", "type", "status", "expiresAt", "createdAt", "downloadable"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "type": {
+            "type": "string",
+            "enum": ["providers", "pin_summary", "staff_performance", "expiring_documents"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "EXPIRED"]
+          },
+          "rowCount": { "type": ["integer", "null"] },
+          "fileName": { "type": ["string", "null"] },
+          "error": { "type": ["string", "null"] },
+          "expiresAt": { "type": "string", "format": "date-time" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "startedAt": { "type": ["string", "null"] },
+          "finishedAt": { "type": ["string", "null"] },
+          "downloadable": { "type": "boolean" }
+        }
+      },
+      "ExportListEnvelope": {
+        "type": "object",
+        "required": ["data", "requestId"],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["rows", "meta"],
+            "additionalProperties": false,
+            "properties": {
+              "rows": { "type": "array", "items": { "$ref": "#/components/schemas/ExportJob" } },
+              "meta": {
+                "type": "object",
+                "required": ["page", "pageSize", "total", "totalPages"],
+                "additionalProperties": false,
+                "properties": {
+                  "page": { "type": "integer", "minimum": 1 },
+                  "pageSize": { "type": "integer", "minimum": 1 },
+                  "total": { "type": "integer", "minimum": 0 },
+                  "totalPages": { "type": "integer", "minimum": 1 }
+                }
+              }
+            }
+          },
+          "requestId": { "type": "string", "minLength": 1 }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": ["error"],
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message", "requestId"],
+            "additionalProperties": true,
+            "properties": {
+              "code": { "type": "string", "minLength": 1 },
+              "message": { "type": "string", "minLength": 1 },
+              "requestId": { "type": "string", "minLength": 1 },
+              "details": { "type": ["object", "null"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}
