@@ -8,8 +8,7 @@ Full details: [`docs/DEPLOYMENT_GUIDE.md`](DEPLOYMENT_GUIDE.md).
 git clone git@github.com:<ORG>/<REPO>.git
 cd <REPO>
 corepack enable
-cp .env.example .env
-cp .env.example apps/web/.env.local
+cp .env.example .env && cp .env.example apps/web/.env.local && cp .env.example apps/worker/.env && cp .env.example packages/db/.env
 pnpm install --frozen-lockfile
 docker compose up -d db minio minio-init mailpit
 pnpm db:generate

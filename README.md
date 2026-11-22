@@ -21,8 +21,7 @@ Vitest · Playwright · Docker Compose · pnpm workspaces.
 
 ```bash
 corepack enable
-cp .env.example .env
-cp .env.example apps/web/.env.local
+cp .env.example .env && cp .env.example apps/web/.env.local && cp .env.example apps/worker/.env && cp .env.example packages/db/.env
 pnpm install --frozen-lockfile
 docker compose up -d db minio minio-init mailpit
 pnpm db:generate

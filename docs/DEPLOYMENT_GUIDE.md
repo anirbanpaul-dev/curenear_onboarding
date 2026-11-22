@@ -244,6 +244,8 @@ Prisma client, migrates and seeds. It does **not** start the app.
 # 1. Environment files (from the repository root)
 cp .env.example .env
 cp .env.example apps/web/.env.local
+cp .env.example apps/worker/.env
+cp .env.example packages/db/.env
 
 # 2. Local services
 docker compose up -d db minio minio-init mailpit

@@ -24,10 +24,12 @@ if [ ! -f .env ]; then
   cp .env.example .env
   printf 'Created .env from .env.example. Set SEED_ADMIN_PASSWORD before seeding.\n'
 fi
-if [ ! -f apps/web/.env.local ]; then
-  cp .env.example apps/web/.env.local
-  printf 'Created apps/web/.env.local from .env.example.\n'
-fi
+for target in apps/web/.env.local apps/worker/.env packages/db/.env; do
+  if [ ! -f "$target" ]; then
+    cp .env.example "$target"
+    printf 'Created %s from .env.example.\n' "$target"
+  fi
+done
 
 printf '\nStarting PostgreSQL, MinIO, bucket bootstrap and Mailpit...\n'
 docker compose up -d db minio minio-init mailpit
