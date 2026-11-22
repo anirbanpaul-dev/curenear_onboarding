@@ -1,0 +1,99 @@
+# Single-server production stack. External managed PostgreSQL and S3 are the
+# default. Start the optional bundled database only with:
+#   docker compose --env-file .env.production --profile with-db up -d
+#
+# Required in .env.production: APP_URL, APP_DOMAIN, ACME_EMAIL, DATABASE_URL,
+# SESSION_SECRET, S3_*, SMTP_*, SEED_ADMIN_* for the first migration run.
+services:
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: toolchain
+    command: sh -c "pnpm --filter @curenear/db migrate:deploy && pnpm --filter @curenear/db seed"
+    env_file: .env.production
+    restart: 'no'
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: web
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      HOSTNAME: 0.0.0.0
+    expose:
+      - '3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/api/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    stop_grace_period: 30s
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+      target: worker
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN in .env.production}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env.production}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./docs/deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Optional. Managed PostgreSQL is strongly preferred: backups, upgrades,
+  # failover, TLS and connection limits are then the provider's job.
+  db:
+    image: postgres:16-alpine
+    profiles: ['with-db']
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-curenear}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-curenear}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-curenear} -d ${POSTGRES_DB:-curenear}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:
+  postgres-data:

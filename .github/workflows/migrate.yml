@@ -1,0 +1,46 @@
+name: migrate
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment whose DATABASE_URL secret to use
+        type: choice
+        options: [staging, production]
+        required: true
+      confirm:
+        description: Type MIGRATE to confirm
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migrate-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: prisma migrate deploy (${{ inputs.environment }})
+    if: inputs.confirm == 'MIGRATE'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @curenear/db generate
+      - run: pnpm db:migrate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
