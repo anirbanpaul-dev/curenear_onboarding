@@ -1,0 +1,147 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: curenear
+      POSTGRES_PASSWORD: curenear
+      POSTGRES_DB: curenear
+    ports:
+      - '5432:5432'
+    volumes:
+      - curenear-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U curenear -d curenear']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - curenear-minio:/data
+    # The server image ships no curl/wget and defines no `mc` alias, so this checks that
+    # the S3 API port accepts connections. Bucket-level readiness is what GET /api/ready
+    # reports (S3 HeadBucket), so nothing here depends on `mc`.
+    healthcheck:
+      test: ['CMD-SHELL', 'bash -c ":> /dev/tcp/127.0.0.1/9000"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Creates the bucket once, then exits. `mc mb --ignore-existing` is idempotent.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mc mb --ignore-existing "local/$$S3_BUCKET" &&
+        echo "bucket $$S3_BUCKET ready"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      S3_BUCKET: ${S3_BUCKET:-curenear}
+
+  mailpit:
+    image: axllent/mailpit:latest
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      - '1025:1025'
+      - '8025:8025'
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: toolchain
+    command: sh -c "pnpm --filter @curenear/db migrate:deploy && pnpm --filter @curenear/db seed"
+    environment:
+      DATABASE_URL: postgresql://curenear:curenear@db:5432/curenear?schema=public
+      SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret-change-me-at-least-32-chars}
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET:-curenear}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minioadmin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_FROM: ${SMTP_FROM:-no-reply@curenear.local}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@curenear.in}
+      SEED_ADMIN_NAME: ${SEED_ADMIN_NAME:-Portal Admin}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?set SEED_ADMIN_PASSWORD in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: web
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://curenear:curenear@db:5432/curenear?schema=public
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret-change-me-at-least-32-chars}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-curenear_session}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-curenear}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minioadmin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+      S3_FORCE_PATH_STYLE: 'true'
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_FROM: ${SMTP_FROM:-no-reply@curenear.local}
+    ports:
+      - '3000:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://curenear:curenear@db:5432/curenear?schema=public
+      SESSION_SECRET: ${SESSION_SECRET:-dev-session-secret-change-me-at-least-32-chars}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET:-curenear}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minioadmin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_FROM: ${SMTP_FROM:-no-reply@curenear.local}
+      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-25}
+      OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-10000}
+      AGGREGATOR_WEBHOOK_URL: ${AGGREGATOR_WEBHOOK_URL:-}
+      AGGREGATOR_WEBHOOK_TOKEN: ${AGGREGATOR_WEBHOOK_TOKEN:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  curenear-db:
+  curenear-minio:

@@ -1,0 +1,10 @@
+{
+  "extends": "../../packages/config/tsconfig/node.json",
+  "include": [
+    "src/**/*.ts",
+    "seed.ts",
+    "tests/**/*.ts",
+    "vitest.config.ts",
+    "vitest.integration.config.ts"
+  ]
+}

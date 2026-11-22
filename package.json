@@ -1,0 +1,48 @@
+{
+  "name": "curenear-provider-onboarding",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @curenear/web --filter @curenear/worker dev",
+    "dev:web": "pnpm --filter @curenear/web dev",
+    "dev:worker": "pnpm --filter @curenear/worker dev",
+    "build": "pnpm --filter @curenear/shared typecheck && pnpm --filter @curenear/db typecheck && pnpm --filter @curenear/web build && pnpm --filter @curenear/worker typecheck",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:int": "pnpm --filter @curenear/db test:int && pnpm --filter @curenear/web test:int && pnpm --filter @curenear/worker test:int",
+    "test:coverage": "pnpm --filter @curenear/shared test:coverage && pnpm --filter @curenear/web test:coverage",
+    "perf:seed": "pnpm seed:synthetic-providers -- --count=100000 --skip-documents",
+    "perf:load": "pnpm --filter @curenear/db exec tsx ../../scripts/load/provider-load.ts",
+    "e2e": "pnpm --filter @curenear/web e2e",
+    "db:generate": "pnpm --filter @curenear/db generate",
+    "db:rebuild-stats": "cd packages/db && npx tsx --env-file=.env ../../scripts/rebuild-pin-stats.ts",
+    "db:backfill-review": "cd packages/db && npx tsx --env-file=.env ../../scripts/backfill-review-verifications.ts",
+    "db:migrate": "pnpm --filter @curenear/db migrate:deploy",
+    "db:seed": "pnpm --filter @curenear/db seed",
+    "import:pincodes": "pnpm --filter @curenear/db exec tsx ../../scripts/import-pincodes.ts",
+    "seed:synthetic-providers": "pnpm --filter @curenear/db exec tsx ../../scripts/seed-provider-directory.ts",
+    "check:fields": "pnpm --filter @curenear/db exec tsx ../../scripts/check-field-registry.ts",
+    "check:env": "cd packages/db && pnpm exec tsx ../../scripts/check-env.ts",
+    "db:reset": "pnpm --filter @curenear/db migrate:reset",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.6.1",
+    "@commitlint/config-conventional": "^19.6.0",
+    "@curenear/config": "workspace:*",
+    "autocannon": "^8.0.0",
+    "eslint": "^9.18.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.3.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3"
+  }
+}

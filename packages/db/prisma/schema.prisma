@@ -1,0 +1,1397 @@
+// CureNear Provider Onboarding Portal — data model.
+// Conventions: UTC timestamps, integer paise for money, 6-digit PIN codes stored
+// as Char(6), soft delete for users/providers, `version` for optimistic locking.
+// Foundation tables (users, sessions, password_reset_tokens, audit_logs,
+// outbox_events, idempotency_keys, settings) use snake_case table and column names
+// via @@map/@map; TypeScript field names stay camelCase. Provider tables keep their
+// original names until the provider phase.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  STAFF
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  LOCKED
+}
+
+enum ProviderType {
+  doctor
+  clinic
+  pharmacy
+  diagnostic_centre
+  care_provider
+}
+
+enum ProviderStatus {
+  draft
+  submitted
+  under_review
+  changes_requested
+  approved_not_live
+  live
+  suspended
+  rejected
+  terminated
+}
+
+enum VerificationStatus {
+  pending
+  verified
+  rejected
+  expired
+  not_applicable
+}
+
+enum PinKind {
+  registered_office
+  location
+  service_area
+}
+
+/// Type of regulator. The councils themselves live in `councils`, not in code.
+enum CouncilKind {
+  medical
+  pharmacy
+  nursing
+  other
+}
+
+/// Lifecycle of a provider organization (docs/field-spec.md section 2).
+/// Deliberately separate from `ProviderStatus`: this model is the normalized
+/// replacement for the flat onboarding form and uses the uppercase states the
+/// provider data model specifies.
+/// What the provider (or their authorized signatory) agreed to. Declarations
+/// are stored one row per declaration key, with the exact text version shown.
+enum ConsentType {
+  publication
+  data_privacy_notice
+  declarations
+  doctor_confirmation
+  agreement
+
+  @@map("ConsentType")
+}
+
+/// How the consent was captured. `LINK_CONFIRMATION` is the tokenised public
+/// page; `OTP` and the others are recorded for evidence purposes.
+enum ConsentMethod {
+  SIGNED_FORM_UPLOAD
+  OTP
+  LINK_CONFIRMATION
+  IN_PERSON_ATTESTATION
+
+  @@map("ConsentMethod")
+}
+
+enum AgreementTemplateStatus {
+  draft
+  active
+  retired
+
+  @@map("AgreementTemplateStatus")
+}
+
+enum ProviderOrganizationStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  CHANGES_REQUESTED
+  APPROVED
+  SUSPENDED
+  REJECTED
+  TERMINATED
+}
+
+/// Doctor profile lifecycle, including the clinic-invitation states in
+/// docs/field-spec.md section 6.5.
+enum DoctorProfileStatus {
+  invited
+  doctor_confirmed
+  under_review
+  approved
+  changes_requested
+  rejected
+}
+
+model User {
+  id                 String     @id @default(uuid()) @db.Uuid
+  email              String     @unique
+  name               String
+  mobile             String?
+  passwordHash       String     @map("password_hash")
+  role               Role
+  status             UserStatus @default(ACTIVE)
+  mustChangePassword Boolean    @default(false) @map("must_change_password")
+  failedLoginCount   Int        @default(0) @map("failed_login_count")
+  lockedUntil        DateTime?  @map("locked_until")
+  lastLoginAt        DateTime?  @map("last_login_at")
+  employeeCode       String?    @unique @map("employee_code")
+  createdByUserId    String?    @map("created_by_user_id") @db.Uuid
+  version            Int        @default(1)
+  deletedAt          DateTime?  @map("deleted_at")
+  createdAt          DateTime   @default(now()) @map("created_at")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+
+  createdBy                 User?                        @relation("UserCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdUsers              User[]                       @relation("UserCreator")
+  sessions                  Session[]
+  passwordResets            PasswordResetToken[]
+  createdProviders          Provider[]                   @relation("ProviderCreator")
+  reviewedProviders         Provider[]                   @relation("ProviderReviewer")
+  createdOrganizations      ProviderOrganization[]       @relation("ProviderOrganizationCreator")
+  approvedOrganizations     ProviderOrganization[]       @relation("ProviderOrganizationApprover")
+  providerStatusChanges     ProviderStatusHistory[]
+  uploadedProviderDocuments ProviderDocument[]
+  uploadedDocuments         Document[]                   @relation("DocumentUploadedBy")
+  verifiedDocuments         Document[]                   @relation("DocumentVerifiedBy")
+  auditEntries              AuditLog[]
+  pinAssignments            StaffPinAssignment[]         @relation("StaffPinAssignments")
+  duplicateDismissals       ProviderDuplicateDismissal[]
+  verifications             VerificationRecord[]
+  revisions                 ProviderRevision[]
+  settingsUpdated           Setting[]                    @relation("SettingUpdatedBy")
+  providerDirectoryViews    ProviderDirectoryView[]      @relation("ProviderDirectoryViews")
+  capturedConsents          ConsentRecord[]              @relation("ConsentCapturedBy")
+  recordedAgreements        AgreementAcceptance[]        @relation("AgreementRecordedBy")
+  notifications             Notification[]
+  exportJobs                ExportJob[]                   @relation("ExportJobsRequested")
+  notificationPreferences   NotificationPreference[]
+
+  @@index([role])
+  @@index([status])
+  @@index([deletedAt])
+  @@index([createdAt])
+  @@index([createdByUserId])
+  @@map("users")
+}
+
+model Session {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  lastSeenAt DateTime? @map("last_seen_at")
+  ip         String?
+  userAgent  String?   @map("user_agent")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  // (userId, expiresAt) also serves lookups by userId alone.
+  @@index([expiresAt])
+  @@index([userId, expiresAt])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("password_reset_tokens")
+}
+
+// Append-only: a database trigger rejects UPDATE and DELETE (see the foundation
+// migration), so `updated_at` never moves after the insert.
+model AuditLog {
+  id               String          @id @default(uuid()) @db.Uuid
+  occurredAt       DateTime        @default(now()) @map("occurred_at")
+  actorUserId      String?         @map("actor_user_id") @db.Uuid
+  actorRole        Role?           @map("actor_role")
+  action           String
+  entityType       String          @map("entity_type")
+  entityId         String          @map("entity_id")
+  before           Json?
+  after            Json?
+  requestId        String?         @map("request_id")
+  changedFieldKeys String[]        @map("changed_field_keys")
+  fromStatus       ProviderStatus? @map("from_status")
+  toStatus         ProviderStatus? @map("to_status")
+  reason           String?
+  ipAddress        String?         @map("ip")
+  userAgent        String?         @map("user_agent")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @default(now()) @updatedAt @map("updated_at")
+
+  actor User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  // The composites cover their leading columns; only createdAt needs its own index.
+  @@index([entityType, entityId, createdAt])
+  @@index([actorUserId, occurredAt])
+  @@index([action, occurredAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model OutboxEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  eventType     String    @map("event_type")
+  eventVersion  Int       @default(1) @map("event_version")
+  aggregateType String    @map("aggregate_type")
+  aggregateId   String    @map("aggregate_id")
+  payload       Json
+  dedupeKey     String?   @unique @map("dedupe_key")
+  occurredAt    DateTime  @default(now()) @map("occurred_at")
+  publishedAt   DateTime? @map("published_at")
+  /// Set once the retry budget is spent; the event is surfaced on
+  /// /admin/system/events and no longer claimed by the publisher.
+  deadLetteredAt DateTime? @map("dead_lettered_at")
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now()) @map("next_attempt_at")
+  lastError     String?   @map("last_error")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([publishedAt, nextAttemptAt])
+  @@index([deadLetteredAt])
+  @@index([aggregateType, aggregateId])
+  @@index([eventType])
+  @@index([occurredAt])
+  @@map("outbox_events")
+}
+
+// `response` holds what a replayed request gets back (today the created resource id;
+// a full cached body can live here later). Scope is "<userId>:<endpoint>".
+model IdempotencyKey {
+  scope       String
+  key         String
+  requestHash String   @map("request_hash")
+  response    Json     @default("{}")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@id([scope, key])
+  @@index([createdAt])
+  @@map("idempotency_keys")
+}
+
+model Setting {
+  key       String   @id
+  value     Json     @default("{}")
+  updatedBy String?  @map("updated_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  updatedByUser User? @relation("SettingUpdatedBy", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@map("settings")
+}
+
+model Provider {
+  id               String         @id @default(uuid()) @db.Uuid
+  providerType     ProviderType
+  status           ProviderStatus @default(draft)
+  displayName      String?
+  legalName        String?
+  data             Json           @default("{}")
+  primaryPinCode   String?        @db.Char(6)
+  city             String?
+  version          Int            @default(1)
+  createdByUserId  String         @db.Uuid
+  submittedAt      DateTime?
+  reviewedAt       DateTime?
+  reviewedByUserId String?        @db.Uuid
+  decisionReason   String?
+  deletedAt        DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  createdBy     User                 @relation("ProviderCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  reviewedBy    User?                @relation("ProviderReviewer", fields: [reviewedByUserId], references: [id], onDelete: Restrict)
+  pins          ProviderPinCode[]
+  verifications VerificationRecord[]
+  revisions     ProviderRevision[]
+
+  @@index([providerType])
+  @@index([status])
+  @@index([createdByUserId])
+  @@index([primaryPinCode])
+  @@index([city])
+  @@index([deletedAt])
+  @@index([createdAt])
+  @@index([status, providerType, createdAt])
+  @@index([createdByUserId, status])
+}
+
+/// Territory reference for a staff member. Informational only: it never grants
+/// access to a provider.
+model StaffPinAssignment {
+  id          String   @id @default(uuid()) @db.Uuid
+  staffUserId String   @map("staff_user_id") @db.Uuid
+  pinCode     String   @map("pin_code") @db.Char(6)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  staffUser User @relation("StaffPinAssignments", fields: [staffUserId], references: [id], onDelete: Cascade)
+
+  @@unique([staffUserId, pinCode])
+  @@index([pinCode])
+  @@map("staff_pin_assignments")
+}
+
+// --- Master data ----------------------------------------------------------
+// Reference lists the whole system reads. They live in tables (never enums) so
+// administrators can edit them without a deploy.
+
+model State {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  districts             District[]
+  pinCodes              PinCode[]
+  councils              Council[]
+  providerOrganizations ProviderOrganization[] @relation("ProviderOrganizationState")
+  providerLocations     ProviderLocation[]     @relation("ProviderLocationState")
+
+  @@map("states")
+}
+
+model District {
+  id        String   @id @default(uuid()) @db.Uuid
+  stateId   String   @map("state_id") @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  state                 State                  @relation(fields: [stateId], references: [id], onDelete: Restrict)
+  pinCodes              PinCode[]
+  providerOrganizations ProviderOrganization[] @relation("ProviderOrganizationDistrict")
+  providerLocations     ProviderLocation[]     @relation("ProviderLocationDistrict")
+
+  @@unique([stateId, name])
+  @@index([name])
+  @@map("districts")
+}
+
+/// One row per PIN code (the India Post directory has several offices per PIN;
+/// the import keeps one representative office).
+model PinCode {
+  pinCode    String   @id @map("pin_code") @db.Char(6)
+  officeName String   @map("office_name")
+  districtId String?  @map("district_id") @db.Uuid
+  stateId    String?  @map("state_id") @db.Uuid
+  latitude   Float?
+  longitude  Float?
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  district District? @relation(fields: [districtId], references: [id], onDelete: SetNull)
+  state    State?    @relation(fields: [stateId], references: [id], onDelete: SetNull)
+
+  @@index([officeName])
+  @@index([stateId])
+  @@index([districtId])
+  @@map("pin_codes")
+}
+
+model Specialty {
+  id               String   @id @default(uuid()) @db.Uuid
+  code             String   @unique
+  name             String
+  /// allopathy | dental | ayurveda | homeopathy | unani | siddha | physiotherapy | other
+  systemOfMedicine String   @map("system_of_medicine")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  doctorProfiles DoctorProfile[]
+
+  @@index([systemOfMedicine])
+  @@map("specialties")
+}
+
+model LicenceType {
+  id                      String         @id @default(uuid()) @db.Uuid
+  code                    String         @unique
+  name                    String
+  applicableProviderTypes ProviderType[] @map("applicable_provider_types")
+  isActive                Boolean        @default(true) @map("is_active")
+  createdAt               DateTime       @default(now()) @map("created_at")
+  updatedAt               DateTime       @updatedAt @map("updated_at")
+
+  providerLicences ProviderLicence[]
+
+  @@map("licence_types")
+}
+
+model Council {
+  id        String      @id @default(uuid()) @db.Uuid
+  code      String      @unique
+  name      String
+  kind      CouncilKind
+  /// Null for national regulators such as the NMC.
+  stateId   String?     @map("state_id") @db.Uuid
+  isActive  Boolean     @default(true) @map("is_active")
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  state          State?          @relation(fields: [stateId], references: [id], onDelete: SetNull)
+  doctorProfiles DoctorProfile[]
+
+  @@index([kind])
+  @@index([stateId])
+  @@map("councils")
+}
+
+model ServiceCategory {
+  id           String       @id @default(uuid()) @db.Uuid
+  code         String       @unique
+  name         String
+  providerType ProviderType @map("provider_type")
+  isActive     Boolean      @default(true) @map("is_active")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  @@index([providerType])
+  @@map("service_categories")
+}
+
+model FacilityType {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("facility_types")
+}
+
+model DocumentType {
+  id                 String         @id @default(uuid()) @db.Uuid
+  code               String         @unique
+  name               String
+  providerTypes      ProviderType[] @map("provider_types")
+  requiresExpiry     Boolean        @default(false) @map("requires_expiry")
+  /// Days before expiry that reminders fire; empty when expiry is not tracked.
+  expiryReminderDays Int[]          @map("expiry_reminder_days")
+  isActive           Boolean        @default(true) @map("is_active")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  documents Document[]
+
+  @@map("document_types")
+}
+
+model ProviderPinCode {
+  id         String   @id @default(uuid()) @db.Uuid
+  providerId String   @db.Uuid
+  pinCode    String   @db.Char(6)
+  kind       PinKind
+  createdAt  DateTime @default(now())
+
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, pinCode])
+  @@index([pinCode])
+  @@index([providerId])
+}
+
+model ProviderRevision {
+  id               String         @id @default(uuid()) @db.Uuid
+  providerId       String         @db.Uuid
+  version          Int
+  status           ProviderStatus
+  changedByUserId  String         @db.Uuid
+  changedFieldKeys String[]
+  snapshot         Json
+  createdAt        DateTime       @default(now())
+
+  provider  Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  changedBy User     @relation(fields: [changedByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([providerId, version])
+  @@index([providerId, createdAt])
+}
+
+model VerificationRecord {
+  id                   String             @id @default(uuid()) @db.Uuid
+  providerId           String             @db.Uuid
+  item                 String
+  status               VerificationStatus @default(pending)
+  verifiedByUserId     String?            @db.Uuid
+  verifiedOn           DateTime?
+  source               String?
+  evidenceRef          String?
+  reason               String?
+  nextVerificationDate DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  provider             Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  verifiedByUserId_ref User?    @relation(fields: [verifiedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([providerId, item])
+  @@index([providerId])
+  @@index([status])
+  @@index([nextVerificationDate])
+  // The legacy flat-provider verification table. The admin review workflow
+  // uses the normalized `verification_records` model below.
+  @@map("legacy_verification_records")
+}
+
+/// Admin review checklist (field spec section 10). One row per document or
+/// claim, either for an organization or for a doctor profile.
+enum ReviewVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  EXPIRED
+  NOT_APPLICABLE
+
+  @@map("ReviewVerificationStatus")
+}
+
+enum SuspensionScope {
+  WHOLE_PROFILE
+  LOCATION
+  SERVICE_CATEGORY
+
+  @@map("SuspensionScope")
+}
+
+model ReviewVerification {
+  id               String                   @id @default(uuid()) @db.Uuid
+  organizationId   String?                  @map("organization_id") @db.Uuid
+  doctorProfileId  String?                  @map("doctor_profile_id") @db.Uuid
+  item             String
+  sectionKey       String?                  @map("section_key")
+  required         Boolean                  @default(true)
+  status           ReviewVerificationStatus @default(PENDING)
+  verifiedByUserId String?                  @map("verified_by") @db.Uuid
+  verifiedAt       DateTime?                @map("verified_at")
+  source           String?
+  evidenceRef      String?                  @map("evidence_ref")
+  reason           String?
+  nextVerificationOn DateTime?              @map("next_verification_on") @db.Date
+  createdAt        DateTime                 @default(now()) @map("created_at")
+  updatedAt        DateTime                 @default(now()) @updatedAt @map("updated_at")
+
+  organization  ProviderOrganization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  doctorProfile DoctorProfile?        @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, item])
+  @@unique([doctorProfileId, item])
+  @@index([organizationId, status])
+  @@map("verification_records")
+}
+
+/// A review comment thread, scoped to one registry section of a provider.
+/// Staff see these when the application is returned for changes.
+model ReviewComment {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  sectionKey     String   @map("section_key")
+  authorUserId   String   @map("author_user_id") @db.Uuid
+  authorRole     String   @map("author_role")
+  body           String
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization ProviderOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@map("review_comments")
+}
+
+/// One reviewer per application; "assign to me" writes this row.
+model ReviewAssignment {
+  organizationId   String   @id @map("organization_id") @db.Uuid
+  reviewerUserId   String   @map("reviewer_user_id") @db.Uuid
+  assignedByUserId String?  @map("assigned_by_user_id") @db.Uuid
+  assignedAt       DateTime @default(now()) @map("assigned_at")
+
+  organization ProviderOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("review_assignments")
+}
+
+/// Singleton row (`id = 'default'`) with the configurable SLA thresholds.
+model ReviewSettings {
+  id              String   @id @default("default")
+  slaWarnHours    Int      @default(48) @map("sla_warn_hours")
+  slaBreachHours  Int      @default(72) @map("sla_breach_hours")
+  updatedByUserId String?  @map("updated_by_user_id") @db.Uuid
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("review_settings")
+}
+
+// --- Provider data model --------------------------------------------------
+// Common data lives in columns; type-specific data lives in `type_data` and is
+// validated against the field registry in `packages/shared/src/fields`.
+// `code` comes from a per-type database sequence (`next_provider_code()`).
+
+model ProviderOrganization {
+  id                    String                     @id @default(uuid()) @db.Uuid
+  /// CN-PH-000123, from `next_provider_code(provider_type)`.
+  code                  String                     @unique
+  providerType          ProviderType               @map("provider_type")
+  status                ProviderOrganizationStatus @default(DRAFT)
+  legalName             String?                    @map("legal_name")
+  tradeName             String?                    @map("trade_name")
+  constitutionType      String?                    @map("constitution_type")
+  registrationNumber    String?                    @map("registration_number")
+  establishedOn         DateTime?                  @map("established_on") @db.Date
+  website               String?
+  email                 String?
+  mobile                String?
+  /// Denormalized from the primary location so discovery never joins. Keep in
+  /// sync whenever the primary location changes.
+  primaryPinCode        String?                    @map("primary_pin_code") @db.Char(6)
+  primaryDistrictId     String?                    @map("primary_district_id") @db.Uuid
+  primaryStateId        String?                    @map("primary_state_id") @db.Uuid
+  typeData              Json                       @default("{}") @map("type_data")
+  typeDataSchemaVersion Int                        @default(1) @map("type_data_schema_version")
+  /// Public profile fields (display name, description, logo, languages).
+  profileData           Json                       @default("{}") @map("profile_data")
+  /// Per-field publication consent and the provider declarations.
+  publicationConsents   Json                       @default("{}") @map("publication_consents")
+  createdByUserId       String                     @map("created_by_user_id") @db.Uuid
+  submittedAt           DateTime?                  @map("submitted_at")
+  approvedAt            DateTime?                  @map("approved_at")
+  approvedByUserId      String?                    @map("approved_by_user_id") @db.Uuid
+  /// True when an always-required document (or licence document) is missing.
+  /// Maintained by database triggers in migration 20260425000100; never write
+  /// it from application code.
+  documentGap           Boolean                    @default(false) @map("document_gap")
+  /// Raised by the expiry job when a document or licence lapses; cleared when
+  /// every live document is valid again. Never blocks approval on its own.
+  complianceFlag        Boolean                    @default(false) @map("compliance_flag")
+  complianceFlagReason  String?                    @map("compliance_flag_reason")
+  /// Optimistic lock: services update with `where: { id, version }`.
+  version               Int                        @default(1)
+  deletedAt             DateTime?                  @map("deleted_at")
+  createdAt             DateTime                   @default(now()) @map("created_at")
+  updatedAt             DateTime                   @updatedAt @map("updated_at")
+
+  createdBy             User                         @relation("ProviderOrganizationCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  approvedBy            User?                        @relation("ProviderOrganizationApprover", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  primaryDistrict       District?                    @relation("ProviderOrganizationDistrict", fields: [primaryDistrictId], references: [id], onDelete: SetNull)
+  primaryState          State?                       @relation("ProviderOrganizationState", fields: [primaryStateId], references: [id], onDelete: SetNull)
+  locations             ProviderLocation[]
+  servicePins           ProviderServicePin[]
+  contacts              ProviderContact[]
+  licences              ProviderLicence[]
+  insurance             ProviderInsurance[]
+  documents             ProviderDocument[]
+  doctorProfiles        DoctorProfile[]              @relation("DoctorProfileOrganization")
+  createdDoctorProfiles DoctorProfile[]              @relation("DoctorProfileCreatedByOrg")
+  doctorLocations       DoctorLocation[]             @relation("DoctorLocationClinic")
+  statusHistory         ProviderStatusHistory[]
+  pinContributions      ProviderPinContribution[]
+  reviewVerifications   ReviewVerification[]
+  reviewComments        ReviewComment[]
+  reviewAssignment      ReviewAssignment?
+  searchIndex           ProviderSearchIndex?
+  duplicateDismissals   ProviderDuplicateDismissal[] @relation("DuplicateDismissals")
+  dismissedAsDuplicate  ProviderDuplicateDismissal[] @relation("DuplicateDismissalsOf")
+  consents              ConsentRecord[]              @relation("ConsentRecords")
+  agreementAcceptances  AgreementAcceptance[]        @relation("AgreementAcceptances")
+  confirmationRequests  ConfirmationRequest[]        @relation("ConfirmationRequests")
+
+  // `(primary_pin_code, provider_type, status)` serves PIN-scoped discovery;
+  // `(created_by_user_id, status)` serves "my applications".
+  @@index([providerType, status])
+  @@index([status, submittedAt])
+  @@index([primaryPinCode])
+  @@index([primaryPinCode, providerType, status])
+  @@index([createdByUserId, status])
+  @@index([deletedAt])
+  @@index([primaryDistrictId])
+  @@index([primaryStateId])
+  @@map("provider_organizations")
+}
+
+/// A branch or premises. The registered office is the row with `is_primary`.
+model ProviderLocation {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  name           String
+  locationType   String   @map("location_type")
+  addressLine1   String   @map("address_line1")
+  addressLine2   String?  @map("address_line2")
+  landmark       String?
+  city           String
+  districtId     String?  @map("district_id") @db.Uuid
+  stateId        String?  @map("state_id") @db.Uuid
+  pinCode        String   @map("pin_code") @db.Char(6)
+  latitude       Float?
+  longitude      Float?
+  isPrimary      Boolean  @default(false) @map("is_primary")
+  isPublic       Boolean  @default(false) @map("is_public")
+  operatingHours Json     @default("{}") @map("operating_hours")
+  bookingPhone   String?  @map("booking_phone")
+  branchRef      String?  @map("branch_ref")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization ProviderOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  district     District?            @relation("ProviderLocationDistrict", fields: [districtId], references: [id], onDelete: SetNull)
+  state        State?               @relation("ProviderLocationState", fields: [stateId], references: [id], onDelete: SetNull)
+  licences     ProviderLicence[]
+  doctorLinks  DoctorLocation[]
+
+  @@index([organizationId])
+  @@index([pinCode])
+  @@index([organizationId, isPrimary])
+  @@index([districtId])
+  @@index([stateId])
+  @@map("provider_locations")
+}
+
+/// Service, delivery or collection coverage. The unique triple keeps the
+/// importer and the portal idempotent.
+model ProviderServicePin {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  pinCode        String   @map("pin_code") @db.Char(6)
+  serviceKind    String   @map("service_kind")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization ProviderOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, pinCode, serviceKind])
+  @@index([pinCode])
+  @@index([organizationId])
+  @@map("provider_service_pins")
+}
+
+model ProviderContact {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  role           String
+  name           String
+  designation    String?
+  phone          String
+  email          String?
+  /// Legal-notice contacts carry a postal address; role contacts leave it null.
+  address        Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization ProviderOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, role])
+  @@index([organizationId])
+  @@map("provider_contacts")
+}
+
+model ProviderLicence {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  locationId     String?   @map("location_id") @db.Uuid
+  licenceTypeId  String?   @map("licence_type_id") @db.Uuid
+  number         String
+  authority      String?
+  issuedOn       DateTime? @map("issued_on") @db.Date
+  validFrom      DateTime? @map("valid_from") @db.Date
+  validTo        DateTime? @map("valid_to") @db.Date
+  status         String    @default("active")
+  documentId     String?   @map("document_id") @db.Uuid
+  details        Json      @default("{}")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization ProviderOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  location     ProviderLocation?    @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  licenceType  LicenceType?         @relation(fields: [licenceTypeId], references: [id], onDelete: SetNull)
+  document     ProviderDocument?    @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([licenceTypeId])
+  @@index([validTo])
+  @@map("provider_licences")
+}
+
+model ProviderInsurance {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  type           String
+  insurer        String
+  policyNo       String    @map("policy_no")
+  limitPaise     Int?      @map("limit_paise")
+  validFrom      DateTime? @map("valid_from") @db.Date
+  validTo        DateTime? @map("valid_to") @db.Date
+  documentId     String?   @map("document_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization ProviderOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  document     ProviderDocument?    @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([validTo])
+  @@map("provider_insurance")
+}
+
+/// Uploaded document metadata. Binaries live in object storage; the field spec
+/// keeps this portal free of clinical records.
+model ProviderDocument {
+  id               String    @id @default(uuid()) @db.Uuid
+  organizationId   String    @map("organization_id") @db.Uuid
+  fileName         String    @map("file_name")
+  mimeType         String    @map("mime_type")
+  sizeBytes        Int       @map("size_bytes")
+  storageKey       String?   @map("storage_key")
+  /// Registry document role ("profile_logo", "medical_registration", ...).
+  role             String?
+  uploadedByUserId String    @map("uploaded_by_user_id") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at")
+  deletedAt        DateTime? @map("deleted_at")
+
+  organization    ProviderOrganization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  uploadedBy      User                  @relation(fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+  licences        ProviderLicence[]
+  insurance       ProviderInsurance[]
+  doctors         DoctorProfile[]
+  consentEvidence ConsentRecord[]       @relation("ConsentEvidence")
+  agreementSigned AgreementAcceptance[] @relation("AgreementSignedDocument")
+
+  @@index([organizationId])
+  @@map("provider_documents")
+}
+
+enum DocumentOwnerType {
+  provider
+  provider_organization
+
+  @@map("DocumentOwnerType")
+}
+
+/// `PENDING_SCAN` holds a confirmed upload while the malware scanner runs.
+enum DocumentStatus {
+  PENDING_SCAN
+  UPLOADED
+  VERIFIED
+  REJECTED
+  EXPIRED
+
+  @@map("DocumentStatus")
+}
+
+/// The reusable document service: one row per uploaded file, for either owner
+/// model. `expires_on` is indexed for the reminder job.
+model Document {
+  id               String            @id @default(uuid()) @db.Uuid
+  ownerType        DocumentOwnerType @map("owner_type")
+  ownerId          String            @map("owner_id") @db.Uuid
+  documentTypeId   String            @map("document_type_id") @db.Uuid
+  fileName         String            @map("file_name")
+  mimeType         String            @map("mime_type")
+  sizeBytes        Int               @map("size_bytes")
+  storageKey       String            @unique @map("storage_key")
+  checksumSha256   String?           @map("checksum_sha256") @db.Char(64)
+  status           DocumentStatus    @default(UPLOADED)
+  expiresOn        DateTime?         @map("expires_on") @db.Date
+  uploadedByUserId String            @map("uploaded_by") @db.Uuid
+  verifiedByUserId String?           @map("verified_by") @db.Uuid
+  verifiedAt       DateTime?         @map("verified_at")
+  rejectionReason  String?           @map("rejection_reason")
+  deletedAt        DateTime?         @map("deleted_at")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @default(now()) @updatedAt @map("updated_at")
+
+  documentType DocumentType @relation(fields: [documentTypeId], references: [id], onDelete: Restrict)
+  uploadedBy   User         @relation("DocumentUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+  verifiedBy   User?        @relation("DocumentVerifiedBy", fields: [verifiedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([ownerType, ownerId])
+  @@index([documentTypeId])
+  @@index([expiresOn])
+  @@index([status, expiresOn])
+  @@map("documents")
+}
+
+/// A doctor is its own record and can be linked to many clinics.
+/// Rule for `organization_id`: it is required once the profile belongs to a
+/// doctor organization. While a clinic has added the doctor, the profile is
+/// clinic-owned (`created_by_org_id` set) and `organization_id` stays NULL until
+/// the doctor confirms (`doctor_confirmed_at`); a CHECK constraint in the
+/// migration enforces it.
+model DoctorProfile {
+  id                String              @id @default(uuid()) @db.Uuid
+  organizationId    String?             @map("organization_id") @db.Uuid
+  fullName          String              @map("full_name")
+  /// Invite contact captured when a clinic adds the doctor (Section 6.5).
+  mobile            String?
+  email             String?
+  registrationNo    String              @map("registration_no")
+  councilId         String?             @map("council_id") @db.Uuid
+  /// The council as the registry captured it, even when master data has no match.
+  councilName       String?             @map("council_name")
+  systemOfMedicine  String              @map("system_of_medicine")
+  specialtyId       String?             @map("specialty_id") @db.Uuid
+  specialtyName     String?             @map("specialty_name")
+  qualifications    Json                @default("[]")
+  photoDocumentId   String?             @map("photo_document_id") @db.Uuid
+  status            DoctorProfileStatus @default(invited)
+  /// The clinic that added the doctor; NULL for self-onboarded doctors.
+  createdByOrgId    String?             @map("created_by_org_id") @db.Uuid
+  doctorConfirmedAt DateTime?           @map("doctor_confirmed_at")
+  deletedAt         DateTime?           @map("deleted_at")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  organization  ProviderOrganization? @relation("DoctorProfileOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+  createdByOrg  ProviderOrganization? @relation("DoctorProfileCreatedByOrg", fields: [createdByOrgId], references: [id], onDelete: SetNull)
+  council       Council?              @relation(fields: [councilId], references: [id], onDelete: SetNull)
+  specialty     Specialty?            @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
+  photoDocument ProviderDocument?     @relation(fields: [photoDocumentId], references: [id], onDelete: SetNull)
+  locations     DoctorLocation[]
+  consents      ConsentRecord[]       @relation("ConsentRecords")
+  verifications ReviewVerification[]
+
+  // One live profile per (registration number, council). The partial unique
+  // index lives in the migration (`WHERE deleted_at IS NULL`).
+  @@index([registrationNo, councilId])
+  @@index([organizationId])
+  @@index([createdByOrgId])
+  @@index([deletedAt])
+  @@map("doctor_profiles")
+}
+
+/// A doctor's practice link. A link points at either a specific location or a
+/// clinic organization (the clinic's own branches decide the venue).
+model DoctorLocation {
+  id                   String   @id @default(uuid()) @db.Uuid
+  doctorProfileId      String   @map("doctor_profile_id") @db.Uuid
+  locationId           String?  @map("location_id") @db.Uuid
+  clinicOrganizationId String?  @map("clinic_organization_id") @db.Uuid
+  roleAtClinic         String?  @map("role_at_clinic")
+  /// Standalone practice metadata (Doctor 4.3); clinic links use `clinic`.
+  practiceType         String?  @map("practice_type")
+  address              Json?
+  publicContact        String?  @map("public_contact")
+  timings              Json     @default("{}")
+  feePaise             Int?     @map("fee_paise")
+  status               String   @default("active")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  doctorProfile DoctorProfile         @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  location      ProviderLocation?     @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  clinic        ProviderOrganization? @relation("DoctorLocationClinic", fields: [clinicOrganizationId], references: [id], onDelete: Cascade)
+
+  @@index([doctorProfileId])
+  @@index([locationId])
+  @@index([clinicOrganizationId])
+  @@map("doctor_locations")
+}
+
+model ProviderStatusHistory {
+  id              String                      @id @default(uuid()) @db.Uuid
+  organizationId  String                      @map("organization_id") @db.Uuid
+  fromStatus      ProviderOrganizationStatus? @map("from_status")
+  toStatus        ProviderOrganizationStatus  @map("to_status")
+  changedByUserId String                      @map("changed_by_user_id") @db.Uuid
+  reason          String?
+  /// Suspension / reinstatement scope and the affected location or service kind.
+  scope           SuspensionScope?
+  scopeRefId      String?                     @map("scope_ref_id") @db.Uuid
+  scopeLabel      String?                     @map("scope_label")
+  /// Sections the reviewer flagged when requesting changes.
+  flaggedSections String[]                    @default([]) @map("flagged_sections")
+  at              DateTime                    @default(now())
+
+  organization ProviderOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  changedBy    User                 @relation(fields: [changedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, at])
+  @@map("provider_status_history")
+}
+
+/// PIN roll-up read model. Recomputed from provider locations and service pins
+/// by `refreshProviderPinStats`; it is a cache, never a source of truth.
+/// An operator has compared two providers and decided they are not duplicates,
+/// so the warning is not shown again for this pair.
+/// One captured consent. `evidence_document_id` points at the signed form or
+/// scan when the method required an upload. Rows are never rewritten except to
+/// revoke them, so the version and timestamp stay intact.
+model ConsentRecord {
+  id                 String        @id @default(uuid()) @db.Uuid
+  organizationId     String        @map("organization_id") @db.Uuid
+  doctorProfileId    String?       @map("doctor_profile_id") @db.Uuid
+  consentType        ConsentType   @map("consent_type")
+  /// Exact text/version shown to the provider: `2026-11-21` or a template version.
+  textVersion        String        @map("text_version")
+  capturedByUserId   String?       @map("captured_by_user_id") @db.Uuid
+  capturedAt         DateTime      @default(now()) @map("captured_at")
+  method             ConsentMethod
+  evidenceDocumentId String?       @map("evidence_document_id") @db.Uuid
+  /// Declaration key, template id, signatory details or OTP challenge reference.
+  confirmationMeta   Json          @default("{}") @map("confirmation_meta")
+  revokedAt          DateTime?     @map("revoked_at")
+  revokedByUserId    String?       @map("revoked_by_user_id") @db.Uuid
+  revokeReason       String?       @map("revoke_reason")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @default(now()) @updatedAt @map("updated_at")
+
+  organization     ProviderOrganization @relation("ConsentRecords", fields: [organizationId], references: [id], onDelete: Cascade)
+  doctorProfile    DoctorProfile?       @relation("ConsentRecords", fields: [doctorProfileId], references: [id], onDelete: SetNull)
+  capturedBy       User?                @relation("ConsentCapturedBy", fields: [capturedByUserId], references: [id], onDelete: SetNull)
+  evidenceDocument ProviderDocument?    @relation("ConsentEvidence", fields: [evidenceDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, consentType])
+  @@index([doctorProfileId])
+  @@index([revokedAt])
+  @@map("consent_records")
+}
+
+/// A partner agreement template. `body` is the source of the pre-filled PDF and
+/// `body_hash` pins the exact text the acceptance refers to.
+model AgreementTemplate {
+  id             String                  @id @default(uuid()) @db.Uuid
+  providerType   ProviderType            @map("provider_type")
+  name           String
+  version        String
+  effectiveFrom  DateTime                @map("effective_from") @db.Date
+  body           String
+  bodyHash       String                  @map("body_hash")
+  fileDocumentId String?                 @map("file_document_id") @db.Uuid
+  status         AgreementTemplateStatus @default(active)
+  createdAt      DateTime                @default(now()) @map("created_at")
+  updatedAt      DateTime                @default(now()) @updatedAt @map("updated_at")
+
+  acceptances AgreementAcceptance[]
+
+  @@unique([providerType, version])
+  @@index([providerType, status])
+  @@map("agreement_templates")
+}
+
+/// A physical or e-signed execution of a template. `stamp_reference` is
+/// admin-only and never shown on the provider-facing screens.
+model AgreementAcceptance {
+  id                   String        @id @default(uuid()) @db.Uuid
+  organizationId       String        @map("organization_id") @db.Uuid
+  templateId           String        @map("template_id") @db.Uuid
+  method               ConsentMethod
+  signedOn             DateTime      @map("signed_on") @db.Date
+  place                String
+  signatoryName        String        @map("signatory_name")
+  signatoryDesignation String        @map("signatory_designation")
+  signedDocumentId     String?       @map("signed_document_id") @db.Uuid
+  stampReference       String?       @map("stamp_reference")
+  witnesses            Json          @default("[]")
+  recordedByUserId     String?       @map("recorded_by_user_id") @db.Uuid
+  revokedAt            DateTime?     @map("revoked_at")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @default(now()) @updatedAt @map("updated_at")
+
+  organization   ProviderOrganization @relation("AgreementAcceptances", fields: [organizationId], references: [id], onDelete: Cascade)
+  template       AgreementTemplate    @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  signedDocument ProviderDocument?    @relation("AgreementSignedDocument", fields: [signedDocumentId], references: [id], onDelete: SetNull)
+  recordedBy     User?                @relation("AgreementRecordedBy", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([templateId])
+  @@map("agreement_acceptances")
+}
+
+/// A tokenised, unauthenticated confirmation link. Only the SHA-256 hash of the
+/// token is stored; the link expires after 48 hours and is single-use.
+model ConfirmationRequest {
+  id               String    @id @default(uuid()) @db.Uuid
+  organizationId   String    @map("organization_id") @db.Uuid
+  doctorProfileId  String?   @map("doctor_profile_id") @db.Uuid
+  tokenHash        String    @unique @map("token_hash") @db.Char(64)
+  expiresAt        DateTime  @map("expires_at")
+  usedAt           DateTime? @map("used_at")
+  revokedAt        DateTime? @map("revoked_at")
+  /// OTP challenge state (hashed code, phone, attempts) for the SMS provider.
+  confirmationMeta Json      @default("{}") @map("confirmation_meta")
+  createdByUserId  String?   @map("created_by_user_id") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  organization ProviderOrganization @relation("ConfirmationRequests", fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([expiresAt])
+  @@map("confirmation_requests")
+}
+
+model ProviderDuplicateDismissal {
+  id                      String   @id @default(uuid()) @db.Uuid
+  organizationId          String   @map("organization_id") @db.Uuid
+  duplicateOrganizationId String   @map("duplicate_organization_id") @db.Uuid
+  dismissedByUserId       String   @map("dismissed_by_user_id") @db.Uuid
+  reason                  String?
+  createdAt               DateTime @default(now()) @map("created_at")
+
+  organization          ProviderOrganization @relation("DuplicateDismissals", fields: [organizationId], references: [id], onDelete: Cascade)
+  duplicateOrganization ProviderOrganization @relation("DuplicateDismissalsOf", fields: [duplicateOrganizationId], references: [id], onDelete: Cascade)
+  dismissedBy           User                 @relation(fields: [dismissedByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, duplicateOrganizationId])
+  @@index([duplicateOrganizationId])
+  @@map("provider_duplicate_dismissals")
+}
+
+/// A named filter preset for the admin provider directory. Views are personal:
+/// the same staff member can keep "Kolkata pharmacies awaiting review" and
+/// open it from any browser. `query` is the URL query string, so a view and a
+/// shared link are the same thing.
+model ProviderDirectoryView {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  name      String
+  query     String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation("ProviderDirectoryViews", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@map("provider_directory_views")
+}
+
+/// Which question a PIN row answers. `primary` counts a provider once at its
+/// primary location PIN; `doctor_practice` counts a doctor at each active
+/// practice PIN; `service` counts a provider at each service-area PIN.
+enum PinStatMeasure {
+  primary
+  doctor_practice
+  service
+
+  @@map("PinStatMeasure")
+}
+
+model ProviderPinStats {
+  pinCode      String                     @map("pin_code") @db.Char(6)
+  providerType ProviderType               @map("provider_type")
+  status       ProviderOrganizationStatus
+  measure      PinStatMeasure             @default(primary)
+  count        Int
+  updatedAt    DateTime                   @updatedAt @map("updated_at")
+
+  @@id([pinCode, providerType, status, measure])
+  @@index([measure, providerType, status])
+  @@map("provider_pin_stats")
+}
+
+/// What one organisation currently contributes to the read model, keyed by the
+/// thing being counted (`subject_id`: the organisation, or a doctor profile for
+/// the doctor-practice measure). Incremental updates diff this against the live
+/// state, so PIN changes and deletes subtract exactly what was added before.
+model ProviderPinContribution {
+  measure        PinStatMeasure
+  subjectId      String                     @map("subject_id") @db.Uuid
+  organizationId String                     @map("organization_id") @db.Uuid
+  pinCode        String                     @map("pin_code") @db.Char(6)
+  providerType   ProviderType               @map("provider_type")
+  status         ProviderOrganizationStatus
+
+  organization ProviderOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([measure, subjectId, pinCode])
+  @@index([organizationId])
+  @@map("provider_pin_contributions")
+}
+
+// --- Event-driven system ------------------------------------------------
+// Notifications are written by the worker's event handlers and also lazily by
+// scheduled jobs. `(user_id, type, event_id)` makes event fan-out idempotent.
+
+model Notification {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  type       String
+  title      String
+  body       String
+  entityType String?   @map("entity_type")
+  entityId   String?   @map("entity_id")
+  eventId    String?   @map("event_id") @db.Uuid
+  readAt     DateTime? @map("read_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type, eventId])
+  @@index([userId, readAt, createdAt])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+enum ExportType {
+  providers
+  pin_summary
+  staff_performance
+  expiring_documents
+
+  @@map("ExportType")
+}
+
+enum ExportStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  EXPIRED
+
+  @@map("ExportStatus")
+}
+
+/// The private-storage object behind a finished CSV export. Exports are not
+/// provider documents, so they never appear in a provider's document list.
+model ExportFile {
+  id             String      @id @default(uuid()) @db.Uuid
+  storageKey     String      @unique @map("storage_key")
+  fileName       String      @map("file_name")
+  mimeType       String      @map("mime_type")
+  sizeBytes      Int         @map("size_bytes")
+  checksumSha256 String?     @map("checksum_sha256") @db.Char(64)
+  createdAt      DateTime    @default(now()) @map("created_at")
+  jobs           ExportJob[]
+
+  @@map("export_files")
+}
+
+/// One asynchronous export request. The worker streams the CSV into private
+/// storage, records the row count and notifies the requester. `expires_at` is
+/// the last moment the download route will sign a URL; a daily job marks the
+/// job EXPIRED and removes the object.
+model ExportJob {
+  id                String       @id @default(uuid()) @db.Uuid
+  type              ExportType
+  status            ExportStatus @default(QUEUED)
+  requestedByUserId String       @map("requested_by_user_id") @db.Uuid
+  filters           Json         @default("{}")
+  rowCount          Int?         @map("row_count")
+  fileDocumentId    String?      @map("file_document_id") @db.Uuid
+  expiresAt         DateTime     @map("expires_at")
+  startedAt         DateTime?    @map("started_at")
+  finishedAt        DateTime?    @map("finished_at")
+  error             String?
+  createdAt         DateTime     @default(now()) @map("created_at")
+  updatedAt         DateTime     @default(now()) @updatedAt @map("updated_at")
+
+  requestedBy  User        @relation("ExportJobsRequested", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  fileDocument ExportFile? @relation(fields: [fileDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([requestedByUserId, status])
+  @@index([status, createdAt])
+  @@map("export_jobs")
+}
+
+/// Absent row means the catalogue default for that type.
+model NotificationPreference {
+  userId    String   @map("user_id") @db.Uuid
+  type      String
+  inApp     Boolean  @default(true) @map("in_app")
+  email     Boolean  @default(true)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, type])
+  @@map("notification_preferences")
+}
+
+/// One row per (event, handler): a replayed event never runs a handler twice.
+model ProcessedEventHandler {
+  eventId     String   @map("event_id") @db.Uuid
+  handler     String
+  processedAt DateTime @default(now()) @map("processed_at")
+
+  @@id([eventId, handler])
+  @@index([processedAt])
+  @@map("processed_event_handlers")
+}
+
+/// History for /admin/system/jobs; written by every pg-boss handler.
+model JobRun {
+  id         String   @id @default(uuid()) @db.Uuid
+  queue      String
+  status     String
+  startedAt  DateTime @map("started_at")
+  finishedAt DateTime @map("finished_at")
+  durationMs Int      @map("duration_ms")
+  summary    Json     @default("{}")
+  error      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([queue, startedAt])
+  @@index([startedAt])
+  @@map("job_runs")
+}
+
+model WebhookEndpoint {
+  id          String   @id @default(uuid()) @db.Uuid
+  url         String   @unique
+  description String?
+  eventTypes  String[] @default([]) @map("event_types")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  deliveries WebhookDelivery[]
+
+  @@map("webhook_endpoints")
+}
+
+/// One row per (endpoint, event). The worker delivers pending rows with
+/// exponential backoff and keeps FAILED rows for inspection.
+model WebhookDelivery {
+  id            String    @id @default(uuid()) @db.Uuid
+  endpointId    String    @map("endpoint_id") @db.Uuid
+  eventId       String    @map("event_id") @db.Uuid
+  eventType     String    @map("event_type")
+  payload       Json
+  status        String    @default("PENDING")
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now()) @map("next_attempt_at")
+  lastError     String?   @map("last_error")
+  deliveredAt   DateTime? @map("delivered_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@unique([endpointId, eventId])
+  @@index([status, nextAttemptAt])
+  @@map("webhook_deliveries")
+}
+
+/// Denormalized fields refreshed by the `search-index` handler.
+model ProviderSearchIndex {
+  organizationId String                     @id @map("organization_id") @db.Uuid
+  code           String
+  providerType   ProviderType               @map("provider_type")
+  status         ProviderOrganizationStatus
+  primaryPinCode String?                    @map("primary_pin_code") @db.Char(6)
+  legalName      String?                    @map("legal_name")
+  city           String?
+  doctorCount    Int                        @default(0) @map("doctor_count")
+  indexedAt      DateTime                   @default(now()) @map("indexed_at")
+
+  organization ProviderOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([primaryPinCode, status])
+  @@index([providerType, status])
+  @@map("provider_search_index")
+}

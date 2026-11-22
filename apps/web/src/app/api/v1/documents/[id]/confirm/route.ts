@@ -1,0 +1,26 @@
+import type { NextRequest } from 'next/server';
+import { documentConfirmSchema, documentIdParamsSchema } from '@curenear/shared';
+import { handleAuthedRequest } from '@/lib/api/handler';
+import { parseBody } from '@/lib/api/http';
+import { getServices } from '@/server/services';
+
+export const dynamic = 'force-dynamic';
+
+export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params;
+  return handleAuthedRequest(
+    req,
+    { id },
+    async ({ actor, params, requestId, ipAddress, userAgent }) => {
+      const { id: documentId } = documentIdParamsSchema.parse(params);
+      const input = await parseBody(req, documentConfirmSchema);
+      return {
+        data: await getServices().documents.confirm(actor, documentId, input, {
+          requestId,
+          ipAddress,
+          userAgent,
+        }),
+      };
+    },
+  );
+}

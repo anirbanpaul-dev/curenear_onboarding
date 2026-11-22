@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    /* Brand teal and cyan sampled from the CureNear mark. */
+    --primary: 191 71% 33%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    /* 40% keeps muted copy above the WCAG AA 4.5:1 threshold on white. */
+    --muted-foreground: 215 16% 40%;
+    --accent: 186 66% 94%;
+    --accent-foreground: 191 71% 24%;
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 88%;
+    --ring: 191 71% 33%;
+    --radius: 0.6rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings:
+      'rlig' 1,
+      'calt' 1;
+  }
+
+  /* Keyboard focus is always visible. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer components {
+  .field-label {
+    @apply mb-1 block text-sm font-medium text-foreground;
+  }
+
+  .field-help {
+    @apply mt-1 text-xs text-muted-foreground;
+  }
+
+  .field-error {
+    @apply mt-1 text-sm font-medium text-destructive;
+  }
+}
