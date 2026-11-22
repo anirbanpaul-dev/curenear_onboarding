@@ -7,4 +7,8 @@ export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
   const { getServerEnv } = await import('@curenear/shared');
   getServerEnv();
+
+  const { beginShutdown } = await import('./server/shutdown');
+  process.once('SIGTERM', () => beginShutdown('SIGTERM'));
+  process.once('SIGINT', () => beginShutdown('SIGINT'));
 }

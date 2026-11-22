@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { withApiHandler } from '@/server/http';
 import { runReadinessChecks } from '@/server/health';
+import { isShuttingDown } from '@/server/shutdown';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,10 +10,11 @@ export async function GET(req: NextRequest) {
   return withApiHandler(
     async ({ requestId }) => {
       const report = await runReadinessChecks();
+      const ready = report.ok && !isShuttingDown();
       return {
-        status: report.ok ? 200 : 503,
+        status: ready ? 200 : 503,
         data: {
-          status: report.ok ? 'ready' : 'not_ready',
+          status: ready ? 'ready' : 'not_ready',
           check: 'readiness',
           checks: report.checks,
           requestId,

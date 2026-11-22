@@ -216,6 +216,11 @@ outbound webhooks and the consumer aggregator. Handler execution is recorded in
 | `GET /api/v1/health` | Alias liveness route under v1. |
 | Worker | No HTTP probe. Liveness is the JSON log `worker_started`; job history is in `job_runs`. |
 
+On `SIGTERM`, the web process marks readiness 503 and logs `web_draining`, then exits after up to
+10 seconds so in-flight requests can finish. The worker stops pg-boss gracefully and disconnects
+Prisma. The web drain was not exercised on Windows in this handover because Windows process
+signals are not POSIX; verify it in the container/platform during the first deploy.
+
 Both web probes use the standard `{ data }` envelope and echo `x-request-id`. No authentication is
 required.
 

@@ -1100,6 +1100,7 @@ Generate secrets with `openssl rand -base64 48`. Never commit a filled file.
 | Smoke script | Passed health/login/authenticated call; readiness 503 without MinIO. |
 | Clean-clone rehearsal | Git clone → `pnpm install --frozen-lockfile` → Prisma generate → migrate → seed → dev server (`/api/health`, `/login` 200) → worker (`worker_started`) passed using the machine's existing PostgreSQL credentials. The `.env.example` credentials are for Docker Compose and were not valid against that local server. |
 | `scripts/backup-db.sh` | **Not verified** — `pg_dump` is not installed on the preparation machine. |
+| Web SIGTERM drain | Wired (`web_draining`, readiness 503, 10-second bound). **Not verified on Windows**, where process signals are not POSIX; verify in the first container/platform deploy. |
 | Secret scan | Gitleaks 8.30.1: working tree 0 findings (two documented false positives) and 6 commits of history 0 findings. |
 | Standalone/Docker image | **Not verified** — Docker unavailable; standalone tracing also fails on this Windows host without symlink permission. |
 | Docker Compose production stack | **Not verified** — Docker unavailable. |
